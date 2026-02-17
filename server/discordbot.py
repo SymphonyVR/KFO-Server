@@ -12,7 +12,8 @@ class Bridgebot(commands.Bot):
     """
 
     def __init__(self, server, target_chanel, hub_id, area_id):
-        intents = discord.Intents.all()
+        intents = discord.Intents.default()
+        intents.message_content = True
         super().__init__(command_prefix="!", intents=intents)
         self.server = server
         self.pending_messages = []
