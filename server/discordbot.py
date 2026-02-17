@@ -1,5 +1,6 @@
 from urllib import parse
 import asyncio
+import aiohttp
 import discord
 from discord.ext import commands
 from discord.utils import escape_markdown
@@ -148,23 +149,8 @@ class Bridgebot(commands.Bot):
                     self.area_id,
                 )
                 
-    def queue_message(self, name, message, charname, anim):
-        base = None
-        avatar_url = None
-        anim_url = None
-        embed_emotes = False
-        if "base_url" in self.server.config["bridgebot"]:
-            base = self.server.config["bridgebot"]["base_url"]
-        if "embed_emotes" in self.server.config["bridgebot"]:
-            embed_emotes = self.server.config["bridgebot"]["embed_emotes"]
-        if base is not None:
-            avatar_url = base + \
-                parse.quote("characters/" + charname + "/char_icon.png")
-            if embed_emotes:
-                anim_url = base + parse.quote(
-                    "characters/" + charname + "/" + anim + ".png"
-                )
-        self.pending_messages.append([name, message, avatar_url, anim_url])
+    def queue_message(self, name, message, charname, anim, pre=None):
+        self.pending_messages.append([name, message, charname, anim, pre])
 
     async def on_ready(self):
         print("Discord Bridge Successfully logged in.")
@@ -187,34 +173,90 @@ class Bridgebot(commands.Bot):
 
             await asyncio.sleep(max(0.1, self.server.config["bridgebot"]["tickspeed"]))
 
-    async def send_char_message(self, name, message, avatar=None, image=None):
+    async def resolve_avatar_url(self, charname, session):
+        base_urls = []
+        if "base_url" in self.server.config["bridgebot"]:
+            base_urls.append(self.server.config["bridgebot"]["base_url"])
+        
+        for base in base_urls:
+            url = base + parse.quote("characters/" + charname + "/char_icon.png")
+            try:
+                async with session.head(url, timeout=2) as resp:
+                    if resp.status == 200:
+                        return url
+            except:
+                pass
+        return None
+
+    async def resolve_image_url(self, charname, anim, pre, session):
+        base_urls = []
+        if "base_url" in self.server.config["bridgebot"]:
+            base_urls.append(self.server.config["bridgebot"]["base_url"])
+
+        # Extensions to try
+        extensions = ['.gif', '.webp', '.avif', '.png']
+        
+        candidates = []
+        if pre and pre != "-" and pre != "":
+             candidates.append(pre)
+        
+        candidates.append("(a)" + anim)
+        candidates.append("(b)" + anim)
+        candidates.append(anim)
+
+        for base in base_urls:
+            base_char = base + "characters/" + parse.quote(charname) + "/"
+            
+            for candidate in candidates:
+                for ext in extensions:
+                    url = base_char + parse.quote(candidate) + ext
+                    try:
+                        async with session.head(url, timeout=2) as resp:
+                            if resp.status == 200:
+                                return url
+                    except:
+                        pass
+        return None
+
+    async def send_char_message(self, name, message, charname, anim, pre=None):
         webhook = None
         embed = None
-        try:
-            webhooks = await self.channel.webhooks()
-            for hook in webhooks:
-                if hook.user == self.user or hook.name == "AO2_Bridgebot":
-                    webhook = hook
-                    break
-            if webhook is None:
-                webhook = await self.channel.create_webhook(name="AO2_Bridgebot")
-            if image is not None:
-                embed = discord.Embed()
-                embed.set_image(url=image)
-                print(avatar, image)
-            await webhook.send(message, username=name, avatar_url=avatar, embed=embed)
-            print(
-                f'[DiscordBridge] Sending message from "{name}" to "{self.channel.name}"'
-            )
-        except Forbidden:
-            print(
-                f'[DiscordBridge] Insufficient permissions - couldnt send char message "{name}: {message}" with avatar "{avatar}" to "{self.channel.name}"'
-            )
-        except HTTPException:
-            print(
-                f'[DiscordBridge] HTTP Failure - couldnt send char message "{name}: {message}" with avatar "{avatar}" to "{self.channel.name}"'
-            )
-        except Exception as ex:
-            # This is a workaround to a problem - [Errno 104] Connection reset by peer occurs due to too many calls for this func.
-            # Simple solution is to increase the tickspeed config so it waits longer between messages sent.
-            print(f"[DiscordBridge] Exception - {ex}")
+        
+        async with aiohttp.ClientSession() as session:
+            avatar = await self.resolve_avatar_url(charname, session)
+            
+            image = None
+            embed_emotes = False
+            if "embed_emotes" in self.server.config["bridgebot"]:
+                embed_emotes = self.server.config["bridgebot"]["embed_emotes"]
+            
+            if embed_emotes:
+                image = await self.resolve_image_url(charname, anim, pre, session)
+
+            try:
+                webhooks = await self.channel.webhooks()
+                for hook in webhooks:
+                    if hook.user == self.user or hook.name == "AO2_Bridgebot":
+                        webhook = hook
+                        break
+                if webhook is None:
+                    webhook = await self.channel.create_webhook(name="AO2_Bridgebot")
+                if image is not None:
+                    embed = discord.Embed()
+                    embed.set_image(url=image)
+                await webhook.send(message, username=name, avatar_url=avatar, embed=embed)
+                print(
+                    f'[DiscordBridge] Sending message from "{name}" to "{self.channel.name}"'
+                )
+            except Forbidden:
+                print(
+                    f'[DiscordBridge] Insufficient permissions - couldnt send char message "{name}: {message}" with avatar "{avatar}" to "{self.channel.name}"'
+                )
+            except HTTPException:
+                print(
+                    f'[DiscordBridge] HTTP Failure - couldnt send char message "{name}: {message}" with avatar "{avatar}" to "{self.channel.name}"'
+                )
+            except Exception as ex:
+                # This is a workaround to a problem - [Errno 104] Connection reset by peer occurs due to too many calls for this func.
+                # Simple solution is to increase the tickspeed config so it waits longer between messages sent.
+                print(f"[DiscordBridge] Exception - {ex}")

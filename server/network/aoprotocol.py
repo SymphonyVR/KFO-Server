@@ -1395,7 +1395,7 @@ class AOProtocol(asyncio.Protocol):
                         # Discord blankpost
                         txt = "_ _"
                     self.server.bridgebot.queue_message(
-                        webname, txt, self.client.char_name, anim
+                        webname, txt, self.client.char_name, anim, pre
                     )
 
         # Check if the message can be considered to contain actions in it
